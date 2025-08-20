@@ -3,11 +3,38 @@ import os
 import sys
 import logging
 import psutil
+import ctypes
+import ctypes.wintypes as wintypes
 import shutil
 from colorama import init as colorama_init, Fore, Style
 
+
+
 # Initialize colorama for Windows terminals
 colorama_init()
+
+def write_process_memory(pid, address, value_bytes):
+    """
+    Write arbitrary bytes to another process's memory (Windows only).
+    Requires Administrator rights.
+    """
+    PROCESS_ALL_ACCESS = 0x1F0FFF
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    process = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
+    if not process:
+        raise ctypes.WinError(ctypes.get_last_error())
+    written = wintypes.SIZE_T()
+    success = kernel32.WriteProcessMemory(
+        process,
+        ctypes.c_void_p(address),
+        value_bytes,
+        len(value_bytes),
+        ctypes.byref(written)
+    )
+    kernel32.CloseHandle(process)
+    if not success:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return written.value
 
 def list_processes():
 	processes = []
@@ -160,63 +187,43 @@ def main():
 					clear_screen()
 					show_memory(p)
 					print('\nActions:')
-					print('[1] Kill process')
-					print('[0] Back')
-					a = input('Choose action: ')
-					if a == '1':
-						confirm = input('Type YES to confirm killing PID %s: ' % p.pid)
-						if confirm == 'YES':
-							kill_process(p)
-							input('\nPress Enter to continue...')
-						else:
-							print('Cancelled.')
-							input('\nPress Enter to continue...')
-					else:
-						input('\nPress Enter to continue...')
-				else:
-					continue
-		elif choice == '2':
-			# Read/Change memory per app (safe: read memory info and allow changing priority)
-			while True:
-				clear_screen()
-				procs = list_processes()
-				show_menu(procs)
-				try:
-					sel = int(input('\nSelect an app to view/change (number, 0 to go back): '))
-				except ValueError:
-					print('Invalid input.')
-					input('\nPress Enter to continue...')
-					continue
-				if sel == 0:
-					break
-				if 1 <= sel <= len(procs):
-					clear_screen()
-					p = procs[sel-1]
-					show_memory(p)
-					print('\nActions:')
-					print('[1] Change priority (safe)')
-					print('[2] Attempt to write arbitrary memory (NOT SUPPORTED)')
-					print('[0] Back')
-					act = input('Choose action: ')
-					if act == '1':
-						change_priority(p)
-						input('\nPress Enter to continue...')
-					elif act == '2':
-						print('\nWriting arbitrary process memory is unsafe and not supported by this tool.')
-						print('If you meant to change process behavior, consider changing priority or restarting it with different args.')
-						input('\nPress Enter to continue...')
-					else:
-						continue
-				else:
-					print('Invalid choice.')
-					input('\nPress Enter to continue...')
-		elif choice == '3':
-			print('Closing.')
-			break
-		else:
-			print('Invalid selection.')
-			input('\nPress Enter to continue...')
+                    print('[1] Change priority (safe)')
+                    print('[2] Attempt to write arbitrary memory (ADVANCED, UNSAFE)')
+                    print('[0] Back')
+                    act = input('Choose action: ')
+                    if act == '1':
+                        change_priority(p)
+                        input('\nPress Enter to continue...')
+                    elif act == '2':
+                        # ADVANCED: Write arbitrary memory (Windows only)
+                        if os.name != 'nt':
+                            print('Arbitrary memory writing is only supported on Windows.')
+                            input('\nPress Enter to continue...')
+                        else:
+                            try:
+                                addr = input('\nEnter memory address (hex, e.g., 0x12345678): ')
+                                if addr.lower().startswith('0x'):
+                                    addr_int = int(addr, 16)
+                                else:
+                                    addr_int = int(addr)
+                                val = input('Enter value to write (ASCII or hex, e.g., \"A\" or \"0x41\"): ')
+                                if val.startswith('0x'):
+                                    value_bytes = bytes.fromhex(val[2:])
+                                else:
+                                    value_bytes = val.encode()
+                                print(f'About to write {value_bytes} to address {hex(addr_int)} of PID {p.pid}.')
+                                print('WARNING: This may crash, corrupt, or destabilize the target process. You must run as Administrator!')
+                                confirm = input('Type YES to confirm: ')
+                                if confirm == 'YES':
+                                    written = write_process_memory(p.pid, addr_int, value_bytes)
+                                    print(f'Wrote {written} bytes to process memory.')
+                                else:
+                                    print('Cancelled.')
+                            except Exception as e:
+                                print('Error writing memory:', e)
+                            input('\nPress Enter to continue...')
+                    else:
+                        continue
 
 if __name__ == "__main__":
 	main()
-
